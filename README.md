@@ -2,39 +2,6 @@
 
 基于 Qt6 `QLocalSocket`（本机命名管道 / Unix domain socket）的强类型 RPC 库，构建为动态库。
 
-- 调用无宏、无 IDL：直接 `callAsync<函数名>(参数..., 回调)`，方法名由 `nameof` 从函数符号推导
-- 参数与返回值用 `QDataStream` 序列化，自定义类型只要实现 `operator<< / operator>>` 即可
-- 服务端业务可返回 `QFuture<T>`：立即释放执行线程，future 完成后再回包，客户端无感知
-- 客户端超时、发布订阅（强类型 `publish<fn>()` 或字符串主题）、线程池并发执行
-
-```
-include/qrpc/   公开头文件（qrpc_export.h 手写导出宏）
-src/            库实现（RpcServer / RpcClient）
-examples/       inline（含 QFuture 业务）、pool（线程池 + 同步业务）两个示例
-bench/          串行 / 流水线 / 多连接三种压测场景
-tests/          QtTest 单元测试（协议、序列化、注册表、端到端）
-```
-
-## 构建
-
-要求 CMake ≥ 3.16、C++20、Qt ≥ 6.2（Core + Network，单元测试需要 Test）。
-
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_PREFIX_PATH="C:/Qt/6.8.3/msvc2022_64"
-cmake --build build --config Debug
-ctest --test-dir build -C Debug
-```
-
-| 选项 | 默认 | 说明 |
-| --- | --- | --- |
-| `QRPC_BUILD_SHARED_LIBS` | `ON` | 关闭则构建静态库（`QRPC_STATIC`） |
-| `QRPC_BUILD_EXAMPLES` | `ON` | 构建 `qrpc_demo_inline` / `qrpc_demo_pool` |
-| `QRPC_BUILD_BENCHMARK` | `ON` | 构建 `qrpc_bench` |
-| `QRPC_BUILD_TESTS` | `ON` | 构建单元测试 |
-| `QRPC_INSTALL` | `ON` | 生成安装与 `find_package(qrpc)` 导出 |
-
-可执行文件与 `qrpc.dll` 统一输出到 `build/bin/<Config>/`。
-
 ## 快速使用
 
 服务端：注册函数 + `listen`（注册必须早于 `listen`）。
