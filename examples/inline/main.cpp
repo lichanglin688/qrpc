@@ -1,9 +1,13 @@
-﻿// main.cpp: 单进程、异步、基于 QLocalSocket 的 RPC 演示。
-//  - 基础 API 是回调式：callAsync<fn>(args..., cb)；
-//  - 想在回调之上用 QFuture，可以自己写一个适配层（见 callAsFuture）；
-//  - 发布订阅：server.publish<fn>(args...) / subscribe<fn>(cb)（强类型），
-//              也可用字符串主题 server.publish(topic, args...) / subscribe(topic, cb)；
-//  - 资源释放在析构函数中显式完成。
+// main.cpp: Inline 策略示例（业务直接在服务端线程执行，零跨线程切换）。
+//
+// 这个示例专门演示「异步业务」，针对的是会阻塞的业务（IO、等设备、长计算）：
+//   - 业务函数返回 QFuture<T>：业务自己起 QThread，用 QPromise 把结果交回去，
+//     函数本身立刻返回，服务端拿到 future 后不占用执行线程，等 future 完成才回包，
+//     客户端看到的仍是一次普通调用；
+//   - future 里抛出的异常不会回包，客户端按超时处理；
+//   - 业务耗时超过客户端超时时间时，客户端同样按超时处理。
+//
+// 其余能力：自定义类型序列化、发布订阅、在回调之上包 QFuture。
 
 #include <QCoreApplication>
 #include <QDataStream>
@@ -40,7 +44,7 @@ QDataStream& operator>>(QDataStream& in, Position& p)
 }
 
 // -------------------- 业务函数（服务端实现） --------------------
-// 这些函数运行在 RpcServer 自有线程池的线程里，不是主线程。
+// Inline 策略下这些函数直接运行在服务端线程（也就是主线程）。
 
 static QString threadTag()
 {
@@ -48,35 +52,9 @@ static QString threadTag()
         QString::number(reinterpret_cast<quintptr>(QThread::currentThreadId()), 16));
 }
 
-static QString policyName(RpcServer::ExecPolicy policy)
-{
-    switch (policy) {
-    case RpcServer::ExecPolicy::Inline:
-        return QStringLiteral("Inline");
-    case RpcServer::ExecPolicy::ThreadPool:
-        return QStringLiteral("ThreadPool");
-    }
-    return QStringLiteral("Unknown");
-}
-
 int add(int a, int b)
 {
     return a + b;
-}
-
-// 业务自身较慢（800ms 后才完成），用来配合客户端超时演示
-QFuture<int> slowAdd(int a, int b)
-{
-    auto promise = std::make_shared<QPromise<int>>();
-    QFuture<int> future = promise->future();
-    promise->start();
-
-    QTimer::singleShot(800, qApp, [promise, a, b] {
-        promise->addResult(a + b);
-        promise->finish();
-    });
-
-    return future;
 }
 
 bool moveTo(int deviceId, const QString& axis, const Position& target)
@@ -94,16 +72,16 @@ void notify(const QString& message)
                         << Qt::endl;
 }
 
-// 返回 QFuture 的异步业务：服务端拿到 future 后立即释放执行线程，
-// 等 future 完成再回包（客户端只看到普通的一次调用）
-QFuture<int> asyncAdd(int a, int b)
+// 业务自身较慢（800ms 后才完成），用来配合客户端超时演示。
+// 注意必须用 QFuture 而不是阻塞式 sleep：Inline 策略下阻塞会把服务端线程
+// （本示例里同时也是客户端所在的线程）一起堵死。
+QFuture<int> slowAdd(int a, int b)
 {
     auto promise = std::make_shared<QPromise<int>>();
     QFuture<int> future = promise->future();
     promise->start();
 
-    // 用 qApp 作 context：无论业务在哪个线程被调用，都在主线程事件循环里延迟完成
-    QTimer::singleShot(200, qApp, [promise, a, b] {
+    QTimer::singleShot(800, qApp, [promise, a, b] {
         promise->addResult(a + b);
         promise->finish();
     });
@@ -111,7 +89,32 @@ QFuture<int> asyncAdd(int a, int b)
     return future;
 }
 
-// 异步业务里出错：异常通过 future 传播成 RPC 错误回给客户端
+// 异步业务（针对会阻塞的业务）：业务自己起一条 QThread 干活，函数本身立刻返回 future，
+// 服务端线程不被占用，期间还能收发其他请求；future 完成时 qrpc 自动回包。
+// 注意它和 ExecPolicy::ThreadPool 是两件事——执行策略决定业务函数在哪条线程被调用，
+// 这里的线程是业务为了不阻塞调用方额外起的（std::thread 同理）。
+QFuture<int> asyncAdd(int a, int b)
+{
+    auto promise = std::make_shared<QPromise<int>>();   // QPromise 不可复制，用 shared_ptr 交给子线程
+    QFuture<int> future = promise->future();
+    promise->start();                                   // 必须先 start 才能往里写结果
+
+    QThread* thread = QThread::create([promise, a, b] {
+        QThread::msleep(200);                           // 模拟阻塞式业务：IO、等设备、长计算
+        QTextStream(stdout) << QString("[worker %1] asyncAdd(%2, %3) done in own thread")
+                                   .arg(threadTag()).arg(a).arg(b)
+                            << Qt::endl;
+        promise->addResult(a + b);                      // 在工作线程里写结果
+        promise->finish();                              // finish 之后 qrpc 才回包
+    });
+    // 一次性线程：跑完自己删掉
+    QObject::connect(thread, &QThread::finished, thread, &QObject::deleteLater);
+    thread->start();
+
+    return future;                                      // 立刻返回，不等待线程结束
+}
+
+// 异步业务里出错：异常通过 future 传播，不会回包（客户端按超时处理）
 QFuture<int> failingAsync(int value)
 {
     auto promise = std::make_shared<QPromise<int>>();
@@ -128,7 +131,6 @@ QFuture<int> failingAsync(int value)
 }
 
 // 主题签名标记：只用来给强类型订阅/发布提供签名（不会被真正调用）。
-// 用函数符号时主题名是 "progress"，与下面的字符串常量必须一致。
 void progress(const QString& task, int percent)
 {
     Q_UNUSED(task);
@@ -171,24 +173,15 @@ int main(int argc, char* argv[])
     QCoreApplication app(argc, argv);
     QTextStream out(stdout);
 
-    const QString serverName = QStringLiteral("qrpc_demo_server");
+    const QString serverName = QStringLiteral("qrpc_demo_inline_server");
 
-    // ---- 服务端 ----
-    // 执行策略可由命令行选择：demo.exe [inline|pool]
-    const QString policyArg = (argc > 1) ? QString::fromLocal8Bit(argv[1]).toLower()
-                                         : QStringLiteral("inline");
-
-    RpcServer::ExecPolicy policy = RpcServer::ExecPolicy::Inline;
-    if (policyArg == QLatin1String("pool"))
-        policy = RpcServer::ExecPolicy::ThreadPool;
-
+    // ---- 服务端：Inline 策略，业务在服务端线程直接执行 ----
     RpcServer server;
-    server.setExecPolicy(policy);
-    server.setThreadCount(4);   // 线程池线程数
+    server.setExecPolicy(RpcServer::ExecPolicy::Inline);
     server.registerHandler<add>();
-    server.registerHandler<slowAdd>();
     server.registerHandler<moveTo>();
     server.registerHandler<notify>();
+    server.registerHandler<slowAdd>();
     server.registerHandler<asyncAdd>();
     server.registerHandler<failingAsync>();
 
@@ -196,9 +189,8 @@ int main(int argc, char* argv[])
         out << "server listen failed: " << serverName << Qt::endl;
         return 1;
     }
-    out << "server listening on '" << serverName << "' (policy="
-        << policyName(server.execPolicy()) << ", threads=" << server.threadCount()
-        << ", main " << threadTag() << ")" << Qt::endl;
+    out << "server listening on '" << serverName
+        << "' (policy=Inline, main " << threadTag() << ")" << Qt::endl;
 
     // ---- 客户端 ----
     RpcClient client;
@@ -235,7 +227,7 @@ int main(int argc, char* argv[])
             out << "  <failingAsync> ok=" << r.ok << " error=" << r.error << Qt::endl;
         });
 
-        // 服务端 800ms 才回，客户端 300ms 超时 -> error == "timeout"
+        // 业务 800ms 才回，客户端 300ms 超时 -> error == "timeout"
         client.callAsync<slowAdd>(1, 2, [&out](const RpcResult<int>& r) {
             if (!r.ok)
                 out << "  <slowAdd> failed: " << r.error << Qt::endl;

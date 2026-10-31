@@ -54,7 +54,7 @@ QByteArray serializeArgs(Tuple&& values, std::index_sequence<I...>)
 //  - callAsync<fn>(args..., cb)：返回 void，结果通过 cb(const RpcResult<R>&) 给出；
 //  - setTimeout(ms)：超时时回 ok=false、error == "timeout"；
 //  - onPush<fn>(cb)：订阅服务端推送；
-//  - 想用 QFuture 的用户在回调之上自己包一层即可（见 examples/demo/main.cpp 的 callAsFuture）。
+//  - 想用 QFuture 的用户在回调之上自己包一层即可（见 examples/inline/main.cpp 的 callAsFuture）。
 // 资源释放全部在析构函数中显式完成，不依赖成员声明顺序。
 class QRPC_EXPORT RpcClient : public QObject
 {
