@@ -1,7 +1,7 @@
 // main.cpp: Inline 策略示例（业务直接在服务端线程执行，零跨线程切换）。
 //
 // 这个示例专门演示「异步业务」，针对的是会阻塞的业务（IO、等设备、长计算）：
-//   - 业务函数返回 QFuture<T>：业务自己起 QThread，用 QPromise 把结果交回去，
+//   - 业务函数返回 QFuture<T>：业务自己起 std::thread，用 QPromise 把结果交回去，
 //     函数本身立刻返回，服务端拿到 future 后不占用执行线程，等 future 完成才回包，
 //     客户端看到的仍是一次普通调用；
 //   - future 里抛出的异常不会回包，客户端按超时处理；
@@ -19,6 +19,7 @@
 
 #include <memory>
 #include <stdexcept>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -89,27 +90,24 @@ QFuture<int> slowAdd(int a, int b)
     return future;
 }
 
-// 异步业务（针对会阻塞的业务）：业务自己起一条 QThread 干活，函数本身立刻返回 future，
+// 异步业务（针对会阻塞的业务）：业务自己起一条线程干活，函数本身立刻返回 future，
 // 服务端线程不被占用，期间还能收发其他请求；future 完成时 qrpc 自动回包。
 // 注意它和 ExecPolicy::ThreadPool 是两件事——执行策略决定业务函数在哪条线程被调用，
-// 这里的线程是业务为了不阻塞调用方额外起的（std::thread 同理）。
+// 这里的线程是业务为了不阻塞调用方额外起的。
 QFuture<int> asyncAdd(int a, int b)
 {
     auto promise = std::make_shared<QPromise<int>>();   // QPromise 不可复制，用 shared_ptr 交给子线程
     QFuture<int> future = promise->future();
     promise->start();                                   // 必须先 start 才能往里写结果
 
-    QThread* thread = QThread::create([promise, a, b] {
+    std::thread([promise, a, b] {
         QThread::msleep(200);                           // 模拟阻塞式业务：IO、等设备、长计算
         QTextStream(stdout) << QString("[worker %1] asyncAdd(%2, %3) done in own thread")
                                    .arg(threadTag()).arg(a).arg(b)
                             << Qt::endl;
         promise->addResult(a + b);                      // 在工作线程里写结果
         promise->finish();                              // finish 之后 qrpc 才回包
-    });
-    // 一次性线程：跑完自己删掉
-    QObject::connect(thread, &QThread::finished, thread, &QObject::deleteLater);
-    thread->start();
+    }).detach();
 
     return future;                                      // 立刻返回，不等待线程结束
 }
