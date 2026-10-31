@@ -1,0 +1,12 @@
+cmake_minimum_required(VERSION 3.16)
+
+# 依赖 qrpc 的 find_package 配置
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+
+find_dependency(Qt6 6.2 COMPONENTS Core Network)
+
+include("${CMAKE_CURRENT_LIST_DIR}/qrpcTargets.cmake")
+
+check_required_components(qrpc)

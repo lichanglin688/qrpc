@@ -1,0 +1,33 @@
+# 构建产物
+/build/
+/build-*/
+/.install-check/
+/.static-check/
+/.consumer-check/
+out/
+cmake-build-*/
+
+# CMake / 编译数据库
+compile_commands.json
+CMakeUserPresets.json
+CMakeCache.txt
+CMakeFiles/
+
+# IDE / 编辑器
+.vs/
+.vscode/
+.idea/
+*.user
+*.vcxproj*
+*.sln
+*.suo
+*.tlog
+*.obj
+*.log
+
+# 其他
+*.pdb
+*.ilk
+*.exp
+.DS_Store
+Thumbs.db
