@@ -1,14 +1,13 @@
 #pragma once
 
-#include <QObject>
+#include <QHash>
 #include <QLocalServer>
+#include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <QThreadPool>
 
 #include <functional>
-#include <string>
-#include <unordered_map>
-#include <unordered_set>
 #include <utility>
 
 #include "qrpc_export.h"
@@ -16,11 +15,6 @@
 #include "rpc_registry.h"
 
 class QLocalSocket;
-
-#if defined(_MSC_VER)
-#  pragma warning(push)
-#  pragma warning(disable: 4251)   // std 容器成员不需要 dll-interface
-#endif
 
 // 基于 QLocalServer 的 RPC 服务端。
 //
@@ -114,10 +108,6 @@ private:
     ExecPolicy m_policy = ExecPolicy::Inline;
     int m_threadCount = 1;
 
-    std::unordered_map<QLocalSocket*, QByteArray> m_buffers;   // 只在服务端线程访问
-    std::unordered_map<std::string, std::unordered_set<QLocalSocket*>> m_subscribers;
+    QHash<QLocalSocket*, QByteArray> m_buffers;   // 只在服务端线程访问
+    QHash<QString, QSet<QLocalSocket*>> m_subscribers;
 };
-
-#if defined(_MSC_VER)
-#  pragma warning(pop)
-#endif

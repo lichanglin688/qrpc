@@ -2,13 +2,13 @@
 
 #include <QBasicTimer>
 #include <QByteArray>
+#include <QHash>
 #include <QLocalSocket>
 #include <QObject>
 #include <QString>
 
 #include <cstdint>
 #include <functional>
-#include <string>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
@@ -18,11 +18,6 @@
 #include "rpc_meta.h"
 #include "rpc_protocol.h"
 #include "rpc_serialize.h"
-
-#if defined(_MSC_VER)
-#  pragma warning(push)
-#  pragma warning(disable: 4251)   // std 容器成员不需要 dll-interface
-#endif
 
 // 调用结果只有两种：ok=true 看 value；ok=false 看 error（目前只会是 "timeout"）。
 template <typename R>
@@ -136,7 +131,7 @@ public:
     // 取消订阅并移除处理函数
     void unsubscribe(const QString& topic)
     {
-        m_subscriptions.erase(topic.toStdString());
+        m_subscriptions.remove(topic);
         sendTopic(rpc::MsgType::Unsubscribe, topic);
     }
 
@@ -161,10 +156,11 @@ private:
     template<typename ArgsTuple, typename Callback>
     void subscribeAs(const QString& topic, Callback&& cb)
     {
-        m_subscriptions[topic.toStdString()] =
+        m_subscriptions.insert(
+            topic,
             [cb = std::forward<Callback>(cb)](const QByteArray& payload) mutable {
                 applyWithDeserialize<ArgsTuple>(payload, cb);
-            };
+            });
 
         sendTopic(rpc::MsgType::Subscribe, topic);
     }
@@ -188,11 +184,8 @@ private:
         QBasicTimer timer;
     };
 
+    // Pending 内含不可拷贝的 QBasicTimer，这里只能用节点式容器，QHash 要求 value 可拷贝
     std::unordered_map<quint64, Pending> m_pending;
-    std::unordered_map<int, quint64> m_timerIndex;   // timerId -> 请求 id
-    std::unordered_map<std::string, std::function<void(const QByteArray&)>> m_subscriptions;
+    QHash<int, quint64> m_timerIndex;   // timerId -> 请求 id
+    QHash<QString, std::function<void(const QByteArray&)>> m_subscriptions;
 };
-
-#if defined(_MSC_VER)
-#  pragma warning(pop)
-#endif

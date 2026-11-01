@@ -2,6 +2,7 @@
 
 #include <QByteArray>
 #include <QFuture>
+#include <QHash>
 #include <QString>
 
 #include <exception>
@@ -10,17 +11,11 @@
 #include <string>
 #include <tuple>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 
 #include "qrpc_export.h"
 #include "rpc_meta.h"
 #include "rpc_serialize.h"
-
-#if defined(_MSC_VER)
-#  pragma warning(push)
-#  pragma warning(disable: 4251)   // std 容器成员不需要 dll-interface
-#endif
 
 namespace rpc_detail
 {
@@ -67,13 +62,12 @@ public:
     template<typename R, typename... Args>
     void registerHandler(const QString& name, R (*function)(Args...))
     {
-        const auto key = name.toStdString();
+        if (m_handlers.contains(name))
+            throw std::runtime_error(
+                (QStringLiteral("RPC function already registered: ") + name).toStdString());
 
-        if (m_handlers.count(key))
-            throw std::runtime_error("RPC function already registered: " + key);
-
-        m_handlers.emplace(
-            key,
+        m_handlers.insert(
+            name,
             [function](const QByteArray& request, const Completion& done)
             {
                 auto args = deserialize<std::decay_t<Args>...>(request);
@@ -93,21 +87,15 @@ public:
     // 会在 future 完成后调用 done，且可能来自任意线程。
     void invoke(const QString& name, const QByteArray& request, Completion done) const
     {
-        const auto it = m_handlers.find(name.toStdString());
+        const auto it = m_handlers.constFind(name);
 
-        if (it == m_handlers.end())
-            throw std::runtime_error("RPC function not found: " + name.toStdString());
+        if (it == m_handlers.cend())
+            throw std::runtime_error(
+                (QStringLiteral("RPC function not found: ") + name).toStdString());
 
-        it->second(request, done);
+        it.value()(request, done);
     }
 
 private:
-    std::unordered_map<
-        std::string,
-        std::function<void(const QByteArray&, const Completion&)>
-    > m_handlers;
+    QHash<QString, std::function<void(const QByteArray&, const Completion&)>> m_handlers;
 };
-
-#if defined(_MSC_VER)
-#  pragma warning(pop)
-#endif

@@ -59,9 +59,9 @@ RpcServer::~RpcServer()
     m_server.disconnect(this);
 
     // 2) 断开所有连接上的回调并关闭连接（m_buffers 的键就是全部在册连接）
-    for (auto& entry : m_buffers) {
-        entry.first->disconnect(this);
-        entry.first->abort();
+    for (auto it = m_buffers.cbegin(); it != m_buffers.cend(); ++it) {
+        it.key()->disconnect(this);
+        it.key()->abort();
     }
 
     // 3) 丢弃排队任务，等待正在执行的业务函数自然结束
@@ -102,7 +102,7 @@ void RpcServer::onNewConnection()
         connect(socket, &QLocalSocket::disconnected, this,
                 [this, socket] {
                     dropSubscriptions(socket);   // 断开即退订，避免向死连接推送
-                    m_buffers.erase(socket);
+                    m_buffers.remove(socket);
                     socket->deleteLater();
                 });
     }
@@ -134,27 +134,25 @@ void RpcServer::onSocketReadyRead(QLocalSocket* socket)
 
 void RpcServer::setSubscription(QLocalSocket* socket, const QString& topic, bool subscribe)
 {
-    const std::string key = topic.toStdString();
-
     if (subscribe) {
-        m_subscribers[key].insert(socket);
+        m_subscribers[topic].insert(socket);
         return;
     }
 
-    const auto it = m_subscribers.find(key);
+    const auto it = m_subscribers.find(topic);
     if (it == m_subscribers.end())
         return;
 
-    it->second.erase(socket);
-    if (it->second.empty())
+    it.value().remove(socket);
+    if (it.value().isEmpty())
         m_subscribers.erase(it);
 }
 
 void RpcServer::dropSubscriptions(QLocalSocket* socket)
 {
     for (auto it = m_subscribers.begin(); it != m_subscribers.end(); ) {
-        it->second.erase(socket);
-        if (it->second.empty())
+        it.value().remove(socket);
+        if (it.value().isEmpty())
             it = m_subscribers.erase(it);
         else
             ++it;
@@ -163,12 +161,12 @@ void RpcServer::dropSubscriptions(QLocalSocket* socket)
 
 int RpcServer::publishTo(const QString& topic, const QByteArray& frame)
 {
-    const auto it = m_subscribers.find(topic.toStdString());
-    if (it == m_subscribers.end())
+    const auto it = m_subscribers.constFind(topic);
+    if (it == m_subscribers.cend())
         return 0;   // 没人订阅，直接丢弃
 
     int sent = 0;
-    for (QLocalSocket* socket : it->second) {
+    for (QLocalSocket* socket : it.value()) {
         if (m_buffers.find(socket) == m_buffers.end())
             continue;   // 连接已断开
         socket->write(frame);   // 不 flush：由事件循环合并写出

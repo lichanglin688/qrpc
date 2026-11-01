@@ -10,8 +10,8 @@ RpcClient::RpcClient(QObject* parent)
     connect(&m_socket, &QLocalSocket::connected, this,
             [this] {
                 // 连接（或重连）后把已订阅的主题重新订阅一次，再通知使用者
-                for (const auto& entry : m_subscriptions)
-                    sendTopic(rpc::MsgType::Subscribe, QString::fromStdString(entry.first));
+                for (auto it = m_subscriptions.cbegin(); it != m_subscriptions.cend(); ++it)
+                    sendTopic(rpc::MsgType::Subscribe, it.key());
                 emit connected();
             });
     connect(&m_socket, &QLocalSocket::disconnected, this,
@@ -97,7 +97,7 @@ void RpcClient::handleResponse(const QByteArray& body)
 
     // 收到响应：立刻关掉该请求的超时定时器，不再等它空转到期
     if (it->second.timer.isActive()) {
-        m_timerIndex.erase(it->second.timer.timerId());
+        m_timerIndex.remove(it->second.timer.timerId());
         it->second.timer.stop();
     }
 
@@ -114,7 +114,7 @@ void RpcClient::timerEvent(QTimerEvent* event)
         return;
     }
 
-    const quint64 id = indexIt->second;
+    const quint64 id = indexIt.value();
     m_timerIndex.erase(indexIt);
 
     const auto it = m_pending.find(id);
@@ -131,11 +131,11 @@ void RpcClient::handlePush(const QByteArray& body)
 {
     const rpc::Push p = rpc::decodePush(body);
 
-    const auto it = m_subscriptions.find(p.name.toStdString());
-    if (it == m_subscriptions.end()) {
+    const auto it = m_subscriptions.constFind(p.name);
+    if (it == m_subscriptions.cend()) {
         emit pushUnhandled(p.name);
         return;
     }
 
-    it->second(p.payload);
+    it.value()(p.payload);
 }
