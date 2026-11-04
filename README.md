@@ -76,6 +76,33 @@ client.subscribe<progress>([](auto task, auto percent) { /* ... */ });
 client.unsubscribe<progress>();
 ```
 
+自定义数据结构：参数和返回值只要是「可默认构造 + 实现了 `QDataStream` 的 `operator<<` / `operator>>`」
+就能直接传，注册与调用都不需要额外包装。
+
+```cpp
+struct Position
+{
+    double x = 0;
+    double y = 0;
+};
+
+// 两个自由函数就够了；放进类型定义的头文件，服务端与客户端包含同一份
+QDataStream& operator<<(QDataStream& out, const Position& p) { return out << p.x << p.y; }
+QDataStream& operator>>(QDataStream& in, Position& p) { return in >> p.x >> p.y; }
+
+bool moveTo(int deviceId, const QString& axis, const Position& target);   // 参数直接用自定义类型
+
+server.registerHandler<moveTo>();
+client.callAsync<moveTo>(1, QStringLiteral("XY"), Position{10.5, 20.5},
+                         [](const RpcResult<bool>& r) { qDebug() << r.ok << r.value; });
+```
+
+- 返回值同理：`Position currentPosition();` 也可以直接注册；
+- 字段的声明顺序就是序列化顺序，收发两端必须用同一份定义；改动结构会破坏兼容性（协议不带版本号）；
+- Qt 容器（`QList` / `QVector` / `QMap` / `QHash`）以及 `std::pair`，只要元素可序列化就能直接传；
+  `std::vector` 这类标准库容器需要自己写对应的 `operator<<` / `operator>>`；
+- 枚举按底层整型序列化，不需要额外处理。
+
 集成到其他工程：
 
 ```cmake
