@@ -165,10 +165,13 @@ int RpcServer::publishTo(const QString& topic, const QByteArray& frame)
     if (it == m_subscribers.cend())
         return 0;   // 没人订阅，直接丢弃
 
+    // 取副本再遍历：write() 可能间接触发事件处理，进而修改订阅表（QSet 是写时复制，拷贝很轻）
+    const QSet<QLocalSocket*> sockets = it.value();
+
+    // 订阅表在 disconnected 回调里同步清理，所以集合里的连接此刻一定还是 Connected，
+    // 不需要再判断状态（也就省掉每次发布一次哈希查找）
     int sent = 0;
-    for (QLocalSocket* socket : it.value()) {
-        if (m_buffers.find(socket) == m_buffers.end())
-            continue;   // 连接已断开
+    for (QLocalSocket* socket : sockets) {
         socket->write(frame);   // 不 flush：由事件循环合并写出
         ++sent;
     }
@@ -227,11 +230,8 @@ void RpcServer::finishRequest(const QPointer<QLocalSocket>& socket, rpc::Respons
 
 void RpcServer::writeResponse(const QPointer<QLocalSocket>& socket, const QByteArray& frame)
 {
-    // !s       : socket 对象已析构（deferred delete 已执行）
-    // 非 Connected: 连接已断开，可能还没走到 deleteLater，此时同样丢弃
-    QLocalSocket* s = socket.data();
-    if (!s || s->state() != QLocalSocket::ConnectedState)
-        return;
-
-    s->write(frame);   // 不 flush：由事件循环合并写出
+    // 只需防止对象已析构（deferred delete 执行后 QPointer 为空）；
+    // 连接已断开时 write() 自己会失败返回 -1，不必再判状态
+    if (QLocalSocket* s = socket.data())
+        s->write(frame);   // 不 flush：由事件循环合并写出
 }
