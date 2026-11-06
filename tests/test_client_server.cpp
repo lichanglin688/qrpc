@@ -197,6 +197,26 @@ private slots:
         QTRY_COMPARE(done, 20);
     }
 
+    void responseToClosedConnectionIsDropped()
+    {
+        // 业务 500ms 才回；请求发出后立刻断开连接，服务端回包时连接已断开
+        // （对象可能还没析构），回包必须被静默丢弃且不影响服务端
+        m_client->callAsync<csSlowAdd>(1, 2, [](const RpcResult<int>&) {});
+        m_client.reset();
+
+        QTest::qWait(700);   // 覆盖服务端实际回包的时刻
+
+        m_connected = false;
+        m_client = std::make_unique<RpcClient>();
+        connect(m_client.get(), &RpcClient::connected, this, [this] { m_connected = true; });
+        m_client->connectToServer(m_name);
+        QVERIFY(QTest::qWaitFor([this] { return m_connected; }, 5000));
+
+        int value = 0;
+        m_client->callAsync<csAdd>(2, 3, [&value](const RpcResult<int>& r) { value = r.value; });
+        QTRY_COMPARE(value, 5);
+    }
+
     void publishToSubscribers()
     {
         int percent = 0;

@@ -227,8 +227,11 @@ void RpcServer::finishRequest(const QPointer<QLocalSocket>& socket, rpc::Respons
 
 void RpcServer::writeResponse(const QPointer<QLocalSocket>& socket, const QByteArray& frame)
 {
+    // !s       : socket 对象已析构（deferred delete 已执行）
+    // 非 Connected: 连接已断开，可能还没走到 deleteLater，此时同样丢弃
     QLocalSocket* s = socket.data();
-    if (!s || m_buffers.find(s) == m_buffers.end())
-        return;   // 连接已断开，丢弃回包
+    if (!s || s->state() != QLocalSocket::ConnectedState)
+        return;
+
     s->write(frame);   // 不 flush：由事件循环合并写出
 }
